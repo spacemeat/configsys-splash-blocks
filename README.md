@@ -71,7 +71,7 @@ assigned hues by contrast so neighbours differ — reusing the palette across no
 ```sh
 configsys plugin add github:spacemeat/configsys-splash-blocks   # or a local path / file: source
 configsys plugin trust configsys-splash-blocks                  # it runs code, so trust is required
-configsys config set splash blocks                              # select it (unset uses the default)
+configsys config set splash configsys-splash-blocks            # select it (or the short `blocks`)
 ```
 
 `configsys config set splash off` disables the splash entirely; unset falls back to the built-in
