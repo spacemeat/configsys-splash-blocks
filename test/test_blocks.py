@@ -183,6 +183,33 @@ def test_determinism_by_seed():
     assert [pc.cells for pc in c.pieces] != [pc.cells for pc in a.pieces]
 
 
+def test_corner_style_is_a_per_run_coin_flip():
+    '''Each run picks ONE style up front: all pieces chamfered, or all square. Both occur across
+    seeds, and a square run draws only BLOCK; a chamfered run uses at least one chamfer glyph.'''
+    chamfers = {blocks.CHAMFER_TL, blocks.CHAMFER_TR, blocks.CHAMFER_BL, blocks.CHAMFER_BR}
+
+    def build(seed):
+        s = blocks.BlocksSplash.__new__(blocks.BlocksSplash)
+        s.rng = random.Random(seed)
+        s.gw, s.gh = 20, 12
+        s.sim = blocks.BlocksSim(s.gw, s.gh, s.rng)      # consumes rng like the real __init__
+        s.chamfered = s.rng.random() < 0.5
+        s._lch, s._rch = s._chamfer_glyphs()
+        return s
+
+    saw_square = saw_cham = False
+    for seed in range(30):
+        s = build(seed)
+        glyphs = {g for row in s._lch for g in row} | {g for row in s._rch for g in row}
+        if s.chamfered:
+            saw_cham = True
+            assert glyphs & chamfers                     # a chamfered run actually chamfers
+        else:
+            saw_square = True
+            assert glyphs == {blocks.BLOCK}              # a square run is pure BLOCK
+    assert saw_square and saw_cham                       # both styles are reachable
+
+
 def test_label_shows_counts_and_percent():
     s = blocks.BlocksSplash.__new__(blocks.BlocksSplash)
     lbl = 'checking install state'

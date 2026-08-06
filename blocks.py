@@ -312,15 +312,20 @@ class BlocksSplash(Splash):
         self.sim = BlocksSim(self.gw, self.gh, self.rng)
         self._attr = self._bake_palette(pal)
         self._label_attr = pal.rgb_pair((238, 238, 246), (12, 12, 18)) | curses.A_BOLD
+        # one coin flip per run: EITHER every piece is chamfered OR every piece is square-cornered
+        self.chamfered = self.rng.random() < 0.5
         self._lch, self._rch = self._chamfer_glyphs()
 
     def _chamfer_glyphs(self):
-        '''Precompute the two glyphs each cell draws — normally BLOCK, but a convex OUTER corner of a
-        piece (two orthogonal sides meeting a DIFFERENT piece) chamfers that corner's char. Fixed for
-        the run (based on the solved tiling), so falling and settled cells look identical.'''
+        '''Precompute the two glyphs each cell draws. If this run is square-cornered, all BLOCK;
+        otherwise a convex OUTER corner of a piece (two orthogonal sides meeting a DIFFERENT piece)
+        chamfers that corner's char. Fixed for the run (based on the solved tiling), so falling and
+        settled cells look identical.'''
         sim, gh, gw, cp = self.sim, self.sim.gh, self.sim.gw, self.sim.cell_piece
         lch = [[BLOCK] * gw for _ in range(gh)]
         rch = [[BLOCK] * gw for _ in range(gh)]
+        if not self.chamfered:
+            return lch, rch                              # square-cornered run
         for r in range(gh):
             for c in range(gw):
                 pid = cp[r][c]
