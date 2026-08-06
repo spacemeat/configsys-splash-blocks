@@ -34,6 +34,9 @@ MIN_DURATION = 0.8
 PALETTE_HUES = 30          # distinct hues in the fixed palette (one pair each)
 MIN_PIECE, MAX_PIECE = 3, 10
 BLOCK = '█'                # one cell = BLOCK * 2 (two side-by-side ≈ a square)
+# filled block-diagonal glyphs that chamfer a piece's convex OUTER corners (a subtle bevel). Each
+# cuts one corner of a single char: TL/BL apply to a cell's LEFT char, TR/BR to its RIGHT char.
+CHAMFER_TL, CHAMFER_TR, CHAMFER_BL, CHAMFER_BR = '🭁', '🭌', '🭒', '🭝'
 
 # Spawn pacing (staggering). Real progress is stepwise — several fast checks can land between frames,
 # or a whole support layer can clear at once — which spawns a burst. We smooth it two ways:
@@ -174,8 +177,12 @@ class BlocksSim:
         return seen
 
     def _colorize(self):
-        '''Greedy contrast colouring: give each piece the hue index farthest (on the wheel) from its
-        already-coloured neighbours, so adjacent pieces are visibly different.'''
+        '''Contrast colouring with VARIETY: give each piece a RANDOM hue chosen among those far
+        enough (>= CONTRAST) on the wheel from its already-coloured neighbours. Picking the single
+        farthest hue (a pure max-distance greedy) collapses a chain to two antipodal colours — which
+        is why the bottom row came out two-toned; sampling the whole "far enough" set restores
+        variety while still guaranteeing neighbours contrast.'''
+        CONTRAST = 0.14                                    # ~50° apart on the hue wheel
         hues = [k / PALETTE_HUES for k in range(PALETTE_HUES)]
         chosen = [None] * len(self.pieces)
         for pid in range(len(self.pieces)):
@@ -184,15 +191,12 @@ class BlocksSim:
             if not nb_hues:
                 k = self.rng.randrange(PALETTE_HUES)
             else:
-                # maximise the minimum distance to neighbour hues; random tie-break for variety
-                best, best_d = [], -1.0
-                for k in range(PALETTE_HUES):
-                    d = min(_hue_dist(hues[k], nh) for nh in nb_hues)
-                    if d > best_d + 1e-9:
-                        best, best_d = [k], d
-                    elif abs(d - best_d) <= 1e-9:
-                        best.append(k)
-                k = best[self.rng.randrange(len(best))]
+                ok = [k for k in range(PALETTE_HUES)
+                      if min(_hue_dist(hues[k], nh) for nh in nb_hues) >= CONTRAST]
+                if not ok:                                 # over-constrained: take the farthest hue
+                    ok = [max(range(PALETTE_HUES),
+                              key=lambda k: min(_hue_dist(hues[k], nh) for nh in nb_hues))]
+                k = ok[self.rng.randrange(len(ok))]
             chosen[pid] = k
             self.pieces[pid].color = k
 
@@ -308,6 +312,35 @@ class BlocksSplash(Splash):
         self.sim = BlocksSim(self.gw, self.gh, self.rng)
         self._attr = self._bake_palette(pal)
         self._label_attr = pal.rgb_pair((238, 238, 246), (12, 12, 18)) | curses.A_BOLD
+        self._lch, self._rch = self._chamfer_glyphs()
+
+    def _chamfer_glyphs(self):
+        '''Precompute the two glyphs each cell draws — normally BLOCK, but a convex OUTER corner of a
+        piece (two orthogonal sides meeting a DIFFERENT piece) chamfers that corner's char. Fixed for
+        the run (based on the solved tiling), so falling and settled cells look identical.'''
+        sim, gh, gw, cp = self.sim, self.sim.gh, self.sim.gw, self.sim.cell_piece
+        lch = [[BLOCK] * gw for _ in range(gh)]
+        rch = [[BLOCK] * gw for _ in range(gh)]
+        for r in range(gh):
+            for c in range(gw):
+                pid = cp[r][c]
+                if pid < 0:
+                    continue
+                # exposed = a neighbouring GRID cell belongs to a different piece (screen edges and
+                # same-piece neighbours are not "outside", so the mass stays flush to the border)
+                et = r > 0 and cp[r - 1][c] != pid
+                eb = r < gh - 1 and cp[r + 1][c] != pid
+                el = c > 0 and cp[r][c - 1] != pid
+                er = c < gw - 1 and cp[r][c + 1] != pid
+                if et and el:
+                    lch[r][c] = CHAMFER_TL
+                elif eb and el:
+                    lch[r][c] = CHAMFER_BL
+                if et and er:
+                    rch[r][c] = CHAMFER_TR
+                elif eb and er:
+                    rch[r][c] = CHAMFER_BR
+        return lch, rch
 
     def _bake_palette(self, pal):
         '''hue -> curses attr: one solid colour per palette hue (a piece is one colour). The ONLY
@@ -320,15 +353,17 @@ class BlocksSplash(Splash):
         self.sim.step(frame.dt)
         sim, scr = self.sim, self.scr
         scr.erase()
-        cell = BLOCK * 2
-        # the settled heap — one solid colour per piece
+        lch, rch = self._lch, self._rch
+        # the settled heap — one solid colour per piece, chamfered outer corners
         sc = sim.settled_color
         for r in range(sim.gh):
             row_c = sc[r]
             for c in range(sim.gw):
                 col = row_c[c]
                 if col >= 0:
-                    self._add(r, c * 2, cell, self._attr[col])
+                    attr = self._attr[col]
+                    self._add(r, c * 2, lch[r][c], attr)
+                    self._add(r, c * 2 + 1, rch[r][c], attr)
         # pieces in flight, drawn at their current fall offset
         for pid in sim.falling:
             pc = sim.pieces[pid]
@@ -337,7 +372,8 @@ class BlocksSplash(Splash):
             for (r, c) in pc.cells:
                 rr = r - drop
                 if 0 <= rr < sim.gh:
-                    self._add(rr, c * 2, cell, attr)
+                    self._add(rr, c * 2, lch[r][c], attr)
+                    self._add(rr, c * 2 + 1, rch[r][c], attr)
         if frame.label:
             self._draw_label(frame)
         return sim.filled
