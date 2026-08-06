@@ -6,7 +6,8 @@ bottom and filling the screen. It's Tetris-ish but freed of the four-cell limit 
 blocks** — and, unlike Tetris, **no rows are ever cleared**; the heap only grows. Shapes stream in
 from just off the top of the screen, several at once, until it's full. Each block cell is **two
 ascii blocks side-by-side** (≈ a square on a modern terminal), and each polyomino is **one solid
-colour**, so the settled screen reads as distinct shapes stacked.
+colour** (picked for hue contrast with its neighbours) with softly **chamfered outer corners**, so
+the settled screen reads as distinct beveled tiles stacked.
 
 The fill is **driven by progress**: it finishes filling just as inspection completes (0 → 100%).
 Purely cosmetic — the blocks are paced by configsys's real progress, never the other way.
