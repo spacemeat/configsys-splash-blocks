@@ -35,6 +35,13 @@ PALETTE_HUES = 30          # distinct hues in the fixed palette (one pair each)
 MIN_PIECE, MAX_PIECE = 3, 10
 BLOCK = '█'                # one cell = BLOCK * 2 (two side-by-side ≈ a square)
 
+# Spawn pacing (staggering). Real progress is stepwise — several fast checks can land between frames,
+# or a whole support layer can clear at once — which spawns a burst. We smooth it two ways:
+PROGRESS_EASE = 3.2        # the sim reacts to an EASED progress, so a stepwise jump ramps over ~0.3s
+LEAD_FRACTION = 0.04       # spawn this fraction of the grid AHEAD of progress — bridges short stalls
+MIN_FILL_SECONDS = 2.6     # cap spawns per frame so a full fill can't happen faster than this (a
+                           # steady stream, never a one-frame dump); also spreads a backlog over frames
+
 
 def _hsv(h, s, v):
     r, g, b = colorsys.hsv_to_rgb(h % 1.0, s, v)
@@ -84,6 +91,8 @@ class BlocksSim:
         self.total_cells = self.gw * self.gh
         self.settled_cells = 0
         self._p = 0.0
+        self._sp = 0.0          # eased progress the spawner reacts to (smooths stepwise jumps)
+        self._spawn_cap = max(4.0, self.total_cells / (MIN_FILL_SECONDS * FPS))   # cells/frame
         self.falling = []
         # a gentle fall: cross the full screen height in ~1.1s. Pieces spawn just off the top and
         # fall the whole way, so fall time depends on distance — the release rule (see step) does the
@@ -245,7 +254,9 @@ class BlocksSim:
     def step(self, dt):
         if dt <= 0:
             return
-        speed = self.fall_speed * (1.5 if self._p >= 0.999 else 1.0)   # a gentle nudge to trim the tail
+        done = self._p >= 0.999
+        self._sp += (self._p - self._sp) * min(1.0, dt * PROGRESS_EASE)   # smooth stepwise progress
+        speed = self.fall_speed * (1.5 if done else 1.0)   # a gentle nudge to trim the tail
         # advance the fallers; settle any that have reached their slot
         still = []
         for pid in self.falling:
@@ -258,18 +269,23 @@ class BlocksSim:
         self.falling = still
 
         inflight = sum(len(self.pieces[p].cells) for p in self.falling)
-        want = self._p * self.total_cells
+        # spawn target: eased progress + a small anticipation lead (bridges short stalls)
+        want = min(self.total_cells, (self._sp + LEAD_FRACTION) * self.total_cells)
+        cap = self._spawn_cap * (2.0 if done else 1.0)     # cells allowed to spawn THIS frame
         # releasable waiting pieces (supporters cleared per the stagger rule); lowest slots first
         releasable = sorted((p for p, pc in enumerate(self.pieces) if pc.state == WAIT and self._releasable(p)),
                             key=lambda p: -self.pieces[p].bottom)
+        spawned = 0
         for pid in releasable:
-            if self.settled_cells + inflight >= want:      # pace to progress
+            if self.settled_cells + inflight >= want or spawned >= cap:   # pace + per-frame stagger
                 break
+            n = len(self.pieces[pid].cells)
             self._release(pid)
-            inflight += len(self.pieces[pid].cells)
+            inflight += n
+            spawned += n
         # safety: work owed but nothing in flight and nothing cleared to fall (shouldn't happen with
         # the acyclic order) -> force the lowest waiting piece so the fill can never stall.
-        if not self.falling and not releasable and self.settled_cells < self.total_cells and want > self.settled_cells:
+        if not self.falling and not releasable and self.settled_cells < self.total_cells and self._p > 0:
             waiting = [p for p, pc in enumerate(self.pieces) if pc.state == WAIT]
             if waiting:
                 self._release(max(waiting, key=lambda p: self.pieces[p].bottom))

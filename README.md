@@ -37,6 +37,13 @@ top** instead of waiting for the support to fully settle first. Knowing the exac
 paces releases so the screen finishes filling right as inspection does. Neighbouring pieces are
 given **contrasting hues** by greedy graph-colouring over a fixed palette.
 
+Spawns are **staggered**: the sim reacts to an eased progress and caps how many cells may spawn per
+frame, so the stepwise nature of real progress (several fast checks landing at once, or a whole
+support layer clearing) becomes a steady stream instead of a burst. A small anticipation *lead*
+spawns slightly ahead of progress to bridge short stalls between checks — but a genuinely long stall
+on one slow check (a network/package query where progress just doesn't move) will still show a
+pause; that timing can't be predicted from partial progress on variadic checks.
+
 ## The shape (a splash code plugin)
 
 | File | Role |

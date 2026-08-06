@@ -128,8 +128,10 @@ def test_fill_tracks_progress_not_racing_ahead():
         sim.set_progress(p)
         for _ in range(120):
             sim.step(1 / 30)
-        # once eased in, the settled heap shouldn't be wildly beyond what progress has "paid for"
-        assert sim.settled_cells <= p * sim.total_cells + blocks.MAX_PIECE + 2
+        # once eased in, the settled heap shouldn't be far beyond what progress has "paid for" —
+        # allow the anticipation lead (bridges short stalls) plus a piece of slack
+        budget = (p + blocks.LEAD_FRACTION) * sim.total_cells + blocks.MAX_PIECE + 2
+        assert sim.settled_cells <= budget
 
 
 def test_no_piece_falls_through_a_settled_cell():
