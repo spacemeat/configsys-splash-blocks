@@ -3,10 +3,10 @@
 A [configsys](https://github.com/spacemeat/configsys) **splash** code plugin: while configsys
 inspects install state, coloured blocks fall from the top and stack up, completing rows along the
 bottom and filling the screen. It's Tetris-ish but freed of the four-cell limit — shapes are **3–10
-blocks** — and, unlike Tetris, **no rows are ever cleared**; the heap only grows. Multiple shapes
-fall at once and more keep coming until the screen is full. Each block cell is **two ascii blocks
-side-by-side** (≈ a square on a modern terminal), with a light-top / dark-edge bevel for a stacked
-3-D look.
+blocks** — and, unlike Tetris, **no rows are ever cleared**; the heap only grows. Shapes stream in
+from just off the top of the screen, several at once, until it's full. Each block cell is **two
+ascii blocks side-by-side** (≈ a square on a modern terminal), and each polyomino is **one solid
+colour**, so the settled screen reads as distinct shapes stacked.
 
 The fill is **driven by progress**: it finishes filling just as inspection completes (0 → 100%).
 Purely cosmetic — the blocks are paced by configsys's real progress, never the other way.
@@ -29,10 +29,13 @@ beneath it. Two properties fall out, and both matter:
   along a jagged border mutually support each other, and the cyclic support graph has no clean drop
   order — the fill deadlocks or crawls.)
 
-Replay then just drops each piece into its solved slot once its supporters have settled — several
-at a time, bottom-up — and, knowing the exact cell count, paces releases so the screen finishes
-filling right as inspection does. Neighbouring pieces are given **contrasting hues** by greedy
-graph-colouring over a fixed palette.
+Replay then drops each piece into its solved slot. Every piece spawns just off the top and falls
+the whole way at the same speed, so a piece is released only once each of its supporters has
+descended past its landing zone (`offset ≤ our own spawn offset`) — same-speed dead reckoning that
+guarantees a piece never catches or lands before its support, while letting pieces **stream from the
+top** instead of waiting for the support to fully settle first. Knowing the exact cell count, it
+paces releases so the screen finishes filling right as inspection does. Neighbouring pieces are
+given **contrasting hues** by greedy graph-colouring over a fixed palette.
 
 ## The shape (a splash code plugin)
 
@@ -51,8 +54,8 @@ key, the deadline, and the plain-text fallback, feeding each frame a minimal
 
 curses `color_pair()` is 8-bit and the host doesn't recycle pairs between frames, so a run must stay
 under 256 distinct `(fg, bg)` pairs. There can be 150+ pieces, so they can't each own a colour;
-instead a **fixed palette** (`PALETTE_HUES` hues × 3 bevel shades ≈ 72 pairs) is pre-baked once, and
-pieces are assigned hues by contrast, reusing the palette.
+instead a **fixed palette** (`PALETTE_HUES` hues, one pair each) is pre-baked once, and pieces are
+assigned hues by contrast so neighbours differ — reusing the palette across non-adjacent pieces.
 
 ## Use it
 

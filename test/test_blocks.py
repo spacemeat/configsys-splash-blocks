@@ -90,8 +90,9 @@ def test_generation_order_is_a_valid_drop_order():
 
 def test_ground_pieces_start_releasable():
     sim = _sim()
-    # at least one piece rests on the floor (need == 0) so the fill can start
-    assert any(pc.need == 0 for pc in sim.pieces)
+    # at least one piece rests only on the floor (no supporters) so the fill can start immediately
+    assert any(not sim.supporters[pid] for pid in range(len(sim.pieces)))
+    assert any(sim._releasable(pid) for pid in range(len(sim.pieces)))
 
 
 def test_progress_is_monotonic_and_clamped():
@@ -144,6 +145,32 @@ def test_no_piece_falls_through_a_settled_cell():
                 # supported by the floor is impossible here (r < gh-1), so the cell below must be
                 # filled OR belong to the same piece (which, being settled, is itself supported)
                 assert sim.settled_color[r + 1][c] >= 0
+
+
+def test_no_overlap_during_fall():
+    '''The stagger rule's core guarantee: at every frame no screen cell is claimed twice — a falling
+    piece never overlaps a settled cell or another faller (so nothing visibly passes through anything
+    or lands on empty space).'''
+    sim = _sim(gw=24, gh=15, seed=6)
+    for i in range(900):
+        sim.set_progress(min(1.0, i / 200))
+        sim.step(1 / 30)
+        occupied = set()
+        for r in range(sim.gh):
+            for c in range(sim.gw):
+                if sim.settled_color[r][c] >= 0:
+                    occupied.add((r, c))
+        for pid in sim.falling:
+            pc = sim.pieces[pid]
+            drop = int(pc.offset)
+            for (r, c) in pc.cells:
+                rr = r - drop
+                if 0 <= rr < sim.gh:                      # on-screen portion of the faller
+                    assert (rr, c) not in occupied, f"overlap at {(rr, c)} frame {i}"
+                    occupied.add((rr, c))
+        if sim.filled:
+            break
+    assert sim.filled
 
 
 def test_determinism_by_seed():

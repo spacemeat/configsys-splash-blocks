@@ -19,8 +19,9 @@ foot exports it so the trusted loader registers `splash: blocks`.
 
 Colour budget: curses `color_pair()` is 8-bit and the host does NOT recycle pairs between frames,
 so a run must stay < 256 distinct pairs. There can be ~150+ pieces, so pieces can't each own a
-colour; instead we use a FIXED palette of PALETTE_HUES hues (× 3 bevel shades = the only pairs) and
-assign pieces by greedy graph-colouring that maximises hue contrast between neighbours.
+colour; instead we use a FIXED palette of PALETTE_HUES hues (one solid colour per piece = the only
+pairs) and assign pieces by greedy graph-colouring that maximises hue contrast between neighbours,
+so the settled screen reads as distinct polyominoes stacked.
 '''
 
 import colorsys
@@ -30,15 +31,9 @@ from configsys.plugins import Splash
 
 FPS = 30.0
 MIN_DURATION = 0.8
-PALETTE_HUES = 24          # distinct hues in the fixed palette (× 3 shades = pairs used)
+PALETTE_HUES = 30          # distinct hues in the fixed palette (one pair each)
 MIN_PIECE, MAX_PIECE = 3, 10
-DROP_ROWS = 10             # a piece spawns at most this many rows above its slot (a short, snappy
-                           # drop). Full-height drops serialised by support depth take ~10s; capping
-                           # the fall keeps the cascade tail ~1s so a short inspection barely overruns.
 BLOCK = '█'                # one cell = BLOCK * 2 (two side-by-side ≈ a square)
-
-# bevel shades per hue: a lit top edge, a shadowed bottom/right edge, flat interior — a 3D stack look
-SH_BASE, SH_LIGHT, SH_DARK = 0, 1, 2
 
 
 def _hsv(h, s, v):
@@ -53,14 +48,14 @@ def _hue_dist(a, b):
 
 
 class _Piece:
-    __slots__ = ('cells', 'top', 'bottom', 'color', 'need', 'state', 'offset')
+    __slots__ = ('cells', 'top', 'bottom', 'color', 'drop', 'state', 'offset')
 
     def __init__(self, cells):
         self.cells = cells                       # [(r, c), ...] in the solved (final) tiling
         self.top = min(r for r, _ in cells)
         self.bottom = max(r for r, _ in cells)
         self.color = 0                           # palette hue index (assigned for contrast)
-        self.need = 0                            # unsettled supporters remaining (0 => releasable)
+        self.drop = self.bottom + 1              # spawn offset: bottom cell starts just off the top
         self.state = 0                           # 0 waiting, 1 falling, 2 settled
         self.offset = 0.0                        # rows still above the final slot while falling
 
@@ -79,7 +74,7 @@ class BlocksSim:
 
     Feed progress via set_progress(frac); advance with step(dt). Releases are paced so
     settled+in-flight cells track progress×total, and `filled` is True once every cell has settled.
-    Read `settled_color`/`settled_shade` (the heap) and `falling` (piece indices in flight) to draw.
+    Read `settled_color` (the heap) and `falling` (piece indices in flight) to draw.
     '''
 
     def __init__(self, gw, gh, rng):
@@ -90,20 +85,19 @@ class BlocksSim:
         self.settled_cells = 0
         self._p = 0.0
         self.falling = []
-        # a snappy fall: DROP_ROWS rows in ~0.15s. Fast enough that the settle-gated cascade tail
-        # after inspection finishes stays ~1s (see DROP_ROWS); the done-boost halves it again.
-        self.fall_speed = max(45.0, self.gh * 3.0)
+        # a gentle fall: cross the full screen height in ~1.1s. Pieces spawn just off the top and
+        # fall the whole way, so fall time depends on distance — the release rule (see step) does the
+        # dead reckoning that keeps a piece from landing before its support.
+        self.fall_speed = max(12.0, self.gh / 1.1)
 
         self.cell_piece = [[-1] * self.gw for _ in range(self.gh)]
         self.pieces = []
         self._partition()
-        self._shade_grid = self._compute_shades()
         self._colorize()
         self._build_supports()
 
-        # the heap, stamped as pieces settle
+        # the heap, stamped one solid colour per piece as pieces settle
         self.settled_color = [[-1] * self.gw for _ in range(self.gh)]
-        self.settled_shade = [[0] * self.gw for _ in range(self.gh)]
 
     # -- endgame solver ---------------------------------------------------
 
@@ -161,22 +155,6 @@ class BlocksSim:
             self.pieces.append(_Piece(cells))
             placed += len(cells)
 
-    def _compute_shades(self):
-        '''Per-cell bevel shade: lit top edge, shadowed bottom/right edge, flat interior.'''
-        cp = self.cell_piece
-        grid = [[SH_BASE] * self.gw for _ in range(self.gh)]
-        for r in range(self.gh):
-            for c in range(self.gw):
-                pid = cp[r][c]
-                above_same = r > 0 and cp[r - 1][c] == pid
-                below_diff = r + 1 >= self.gh or cp[r + 1][c] != pid
-                right_diff = c + 1 >= self.gw or cp[r][c + 1] != pid
-                if not above_same:
-                    grid[r][c] = SH_LIGHT
-                elif below_diff or right_diff:
-                    grid[r][c] = SH_DARK
-        return grid
-
     def _adjacent_pieces(self, pid):
         seen = set()
         for (r, c) in self.pieces[pid].cells:
@@ -210,20 +188,18 @@ class BlocksSim:
             self.pieces[pid].color = k
 
     def _build_supports(self):
-        '''For each piece, count distinct supporters (pieces with a cell directly beneath one of
-        ours) and record dependents, so settling a piece can free the ones resting on it. A piece
-        supported only by the floor starts releasable (need == 0).'''
-        self.dependents = [[] for _ in self.pieces]
+        '''For each piece record its distinct SUPPORTERS — the pieces with a cell directly beneath
+        one of ours (its slot rests on them). By construction these are all earlier pieces, so the
+        graph is acyclic; the release rule (see step) uses them for the fall-order stagger.'''
+        self.supporters = []
         for pid, pc in enumerate(self.pieces):
-            supporters = set()
+            sup = set()
             for (r, c) in pc.cells:
                 if r + 1 < self.gh:
                     q = self.cell_piece[r + 1][c]
                     if q != pid:
-                        supporters.add(q)
-            pc.need = len(supporters)
-            for q in supporters:
-                self.dependents[q].append(pid)
+                        sup.add(q)
+            self.supporters.append(sorted(sup))
 
     # -- runtime ----------------------------------------------------------
 
@@ -239,7 +215,7 @@ class BlocksSim:
     def _release(self, pid):
         pc = self.pieces[pid]
         pc.state = FALL
-        pc.offset = float(min(pc.top + 1, DROP_ROWS))    # a short drop into the slot (capped)
+        pc.offset = float(pc.drop)                        # spawn just off the top; fall the whole way
         self.falling.append(pid)
 
     def _settle(self, pid):
@@ -248,15 +224,28 @@ class BlocksSim:
         pc.offset = 0.0
         for (r, c) in pc.cells:
             self.settled_color[r][c] = pc.color
-            self.settled_shade[r][c] = self._shade_grid[r][c]
         self.settled_cells += len(pc.cells)
-        for dep in self.dependents[pid]:
-            self.pieces[dep].need -= 1
+
+    def _releasable(self, pid):
+        '''A waiting piece may start falling once each supporter is settled OR is already falling and
+        has descended to offset <= our own spawn offset. Since every piece falls at the same speed,
+        that guarantees we never catch or land before a supporter (our remaining distance stays >=
+        theirs) — the dead reckoning that lets pieces stream from the top instead of waiting for the
+        support to fully settle first.'''
+        my = self.pieces[pid].drop
+        for q in self.supporters[pid]:
+            qs = self.pieces[q]
+            if qs.state == SET:
+                continue
+            if qs.state == FALL and qs.offset <= my:
+                continue
+            return False
+        return True
 
     def step(self, dt):
         if dt <= 0:
             return
-        speed = self.fall_speed * (2.0 if self._p >= 0.999 else 1.0)
+        speed = self.fall_speed * (1.5 if self._p >= 0.999 else 1.0)   # a gentle nudge to trim the tail
         # advance the fallers; settle any that have reached their slot
         still = []
         for pid in self.falling:
@@ -270,27 +259,25 @@ class BlocksSim:
 
         inflight = sum(len(self.pieces[p].cells) for p in self.falling)
         want = self._p * self.total_cells
-        released_any = False
-        # releasable = waiting pieces whose supporters have all settled; lowest slots first
-        releasable = sorted((p for p, pc in enumerate(self.pieces) if pc.state == WAIT and pc.need <= 0),
+        # releasable waiting pieces (supporters cleared per the stagger rule); lowest slots first
+        releasable = sorted((p for p, pc in enumerate(self.pieces) if pc.state == WAIT and self._releasable(p)),
                             key=lambda p: -self.pieces[p].bottom)
         for pid in releasable:
-            if self.settled_cells + inflight >= want:
+            if self.settled_cells + inflight >= want:      # pace to progress
                 break
             self._release(pid)
             inflight += len(self.pieces[pid].cells)
-            released_any = True
-        # anti-stall / cycle-break: nothing in flight but work owed and a dependency cycle blocks
-        # every releasable piece -> force the lowest waiting piece so the fill can't deadlock.
-        if not self.falling and not released_any and self.settled_cells < self.total_cells and want > self.settled_cells:
+        # safety: work owed but nothing in flight and nothing cleared to fall (shouldn't happen with
+        # the acyclic order) -> force the lowest waiting piece so the fill can never stall.
+        if not self.falling and not releasable and self.settled_cells < self.total_cells and want > self.settled_cells:
             waiting = [p for p, pc in enumerate(self.pieces) if pc.state == WAIT]
             if waiting:
                 self._release(max(waiting, key=lambda p: self.pieces[p].bottom))
 
 
 class BlocksSplash(Splash):
-    '''The `blocks` splash: a curses driver around a BlocksSim. Pre-bakes the fixed hue×shade
-    palette once (bounded, well under the 255-pair ceiling), then render(frame) advances the sim
+    '''The `blocks` splash: a curses driver around a BlocksSim. Pre-bakes one solid colour per
+    palette hue once (bounded, far under the 255-pair ceiling), then render(frame) advances the sim
     toward frame.progress and paints the settled heap plus the pieces in flight. The host owns the
     loop (run_splash) — this just draws one frame and reports whether the screen is full.'''
 
@@ -307,16 +294,10 @@ class BlocksSplash(Splash):
         self._label_attr = pal.rgb_pair((238, 238, 246), (12, 12, 18)) | curses.A_BOLD
 
     def _bake_palette(self, pal):
-        '''[hue][shade] -> curses attr. base / lit-top / shadowed-edge per hue. The ONLY pairs the
-        run allocates (PALETTE_HUES × 3), so the pair count is fixed regardless of piece count.'''
-        attr = []
-        for k in range(PALETTE_HUES):
-            h = k / PALETTE_HUES
-            base = pal.rgb_attr(_hsv(h, 0.62, 0.82))
-            light = pal.rgb_attr(_hsv(h, 0.42, 0.98)) | curses.A_BOLD
-            dark = pal.rgb_attr(_hsv(h, 0.72, 0.52))
-            attr.append((base, light, dark))
-        return attr
+        '''hue -> curses attr: one solid colour per palette hue (a piece is one colour). The ONLY
+        pairs the run allocates (PALETTE_HUES), so the pair count is fixed regardless of piece count.'''
+        return [pal.rgb_attr(_hsv(k / PALETTE_HUES, 0.66, 0.86)) | curses.A_BOLD
+                for k in range(PALETTE_HUES)]
 
     def render(self, frame):
         self.sim.set_progress(frame.progress)
@@ -324,23 +305,23 @@ class BlocksSplash(Splash):
         sim, scr = self.sim, self.scr
         scr.erase()
         cell = BLOCK * 2
-        # the settled heap
-        sc, ss = sim.settled_color, sim.settled_shade
+        # the settled heap — one solid colour per piece
+        sc = sim.settled_color
         for r in range(sim.gh):
-            row_c, row_s = sc[r], ss[r]
+            row_c = sc[r]
             for c in range(sim.gw):
                 col = row_c[c]
                 if col >= 0:
-                    self._add(r, c * 2, cell, self._attr[col][row_s[c]])
+                    self._add(r, c * 2, cell, self._attr[col])
         # pieces in flight, drawn at their current fall offset
         for pid in sim.falling:
             pc = sim.pieces[pid]
             drop = int(pc.offset)
-            attrs = self._attr[pc.color]
+            attr = self._attr[pc.color]
             for (r, c) in pc.cells:
                 rr = r - drop
                 if 0 <= rr < sim.gh:
-                    self._add(rr, c * 2, cell, attrs[sim._shade_grid[r][c]])
+                    self._add(rr, c * 2, cell, attr)
         if frame.label:
             self._draw_label(frame)
         return sim.filled
