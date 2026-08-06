@@ -1,0 +1,20 @@
+{
+    // configsys-splash-blocks — the "blocks" startup splash as a code plugin: falling coloured
+    // blocks (Tetris-ish, but shapes of 3–10 cells, not just tetrominoes) tumble from the top and
+    // stack up, completing rows along the bottom and filling the screen — no rows are ever cleared.
+    // Each cell is two ascii blocks side-by-side (≈ a square). It first solves a complete tiling of
+    // the screen, then replays it, dropping each piece in a gravity-respecting order so nothing
+    // falls through anything and the fill lands just as inspection completes. Its clock is DRIVEN by
+    // configsys's inspection progress. Rides the same splash provider ABI as the built-in default
+    // (see configsys/splashes.py).
+    name: configsys-splash-blocks
+
+    // The plugin ABI this code targets; configsys loads it only if this is in ABI_SUPPORTED.
+    requires-abi: 1
+
+    // Informational: the splash provider this brings (selectable as `splash: blocks`).
+    provides: { splashes: [ blocks ] }
+
+    // The Splash provider module. It runs code, so it needs `plugin trust <name>` before it loads.
+    code: blocks.py
+}

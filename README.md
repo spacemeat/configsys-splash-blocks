@@ -1,0 +1,75 @@
+# configsys-splash-blocks — the "blocks" startup splash
+
+A [configsys](https://github.com/spacemeat/configsys) **splash** code plugin: while configsys
+inspects install state, coloured blocks fall from the top and stack up, completing rows along the
+bottom and filling the screen. It's Tetris-ish but freed of the four-cell limit — shapes are **3–10
+blocks** — and, unlike Tetris, **no rows are ever cleared**; the heap only grows. Multiple shapes
+fall at once and more keep coming until the screen is full. Each block cell is **two ascii blocks
+side-by-side** (≈ a square on a modern terminal), with a light-top / dark-edge bevel for a stacked
+3-D look.
+
+The fill is **driven by progress**: it finishes filling just as inspection completes (0 → 100%).
+Purely cosmetic — the blocks are paced by configsys's real progress, never the other way.
+
+It's a sibling of [configsys-splash-ocean](https://github.com/spacemeat/configsys-splash-ocean) —
+both ride the same **splash provider ABI**, so a splash is just a trusted code plugin you select
+with the `splash:` machine setting. Core ships only a trust-free `braille-bar` default.
+
+## How it fills so cleanly (and on time)
+
+The screen is a grid of cells (`W/2 × H`). Before anything falls, the sim **solves a complete
+tiling** of that grid into polyominoes by *surface accretion*: it always starts the next piece at
+the surface of the currently-lowest column and only ever adds a cell that has support directly
+beneath it. Two properties fall out, and both matter:
+
+- **No holes** — we always fill the lowest gap and never cover empty space, so the board packs
+  bottom-up with nothing trapped.
+- **No support cycles** — every piece rests on the floor or on *earlier* pieces, so the generation
+  order is itself a valid gravity drop order. (An arbitrary tiling doesn't have this: pieces meeting
+  along a jagged border mutually support each other, and the cyclic support graph has no clean drop
+  order — the fill deadlocks or crawls.)
+
+Replay then just drops each piece into its solved slot once its supporters have settled — several
+at a time, bottom-up — and, knowing the exact cell count, paces releases so the screen finishes
+filling right as inspection does. Neighbouring pieces are given **contrasting hues** by greedy
+graph-colouring over a fixed palette.
+
+## The shape (a splash code plugin)
+
+| File | Role |
+| --- | --- |
+| `plugin.hu` | manifest — `name`, `requires-abi`, `provides.splashes`, `code:` |
+| `blocks.py` | the provider: `BlocksSim` (curses-free, deterministic, unit-tested) + `BlocksSplash(Splash)` + `SPLASHES = [BlocksSplash]` |
+| `test/` | the solver / colouring / fill-runtime unit tests |
+
+The contract (see `configsys/splashes.py`): subclass `Splash`, set a class-level `name`, implement
+`render(frame)` — the **host** (`configsys.tui.splash.run_splash`) owns the frame loop, the skip
+key, the deadline, and the plain-text fallback, feeding each frame a minimal
+`SplashFrame(progress, counts, label, dt, elapsed, done)`. Export `SPLASHES = [YourSplash]`.
+
+### A note on colours
+
+curses `color_pair()` is 8-bit and the host doesn't recycle pairs between frames, so a run must stay
+under 256 distinct `(fg, bg)` pairs. There can be 150+ pieces, so they can't each own a colour;
+instead a **fixed palette** (`PALETTE_HUES` hues × 3 bevel shades ≈ 72 pairs) is pre-baked once, and
+pieces are assigned hues by contrast, reusing the palette.
+
+## Use it
+
+```sh
+configsys plugin add github:spacemeat/configsys-splash-blocks   # or a local path / file: source
+configsys plugin trust configsys-splash-blocks                  # it runs code, so trust is required
+configsys config set splash blocks                              # select it (unset uses the default)
+```
+
+`configsys config set splash off` disables the splash entirely; unset falls back to the built-in
+`braille-bar` line.
+
+## Tests
+
+```sh
+PYTHONPATH=/path/to/configsys python -m pytest test/ -q
+```
+
+Only the curses-free core (`BlocksSim`) is unit-tested; `BlocksSplash.render` drives curses and is
+exercised by hand. The sim is deterministic given its `rng`, so the assertions are stable.
