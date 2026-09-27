@@ -18,7 +18,7 @@ curses-free, deterministic sim (unit-tested); BlocksSplash the curses renderer. 
 foot exports it so the trusted loader registers `splash: blocks`.
 
 Colour budget: curses `color_pair()` is 8-bit and the host does NOT recycle pairs between frames,
-so a run must stay < 256 distinct pairs (this one uses 2×PALETTE_HUES: solid + chamfer edge). There can be ~150+ pieces, so pieces can't each own a
+so a run must stay < 256 distinct pairs (this one uses PALETTE_HUES). There can be ~150+ pieces, so pieces can't each own a
 colour; instead we use a FIXED palette of PALETTE_HUES hues (one solid colour per piece = the only
 pairs) and assign pieces by greedy graph-colouring that maximises hue contrast between neighbours,
 so the settled screen reads as distinct polyominoes stacked.
@@ -34,9 +34,6 @@ MIN_DURATION = 0.8
 PALETTE_HUES = 30          # distinct hues in the fixed palette (one pair each)
 MIN_PIECE, MAX_PIECE = 3, 10
 BLOCK = '█'                # one cell = BLOCK * 2 (two side-by-side ≈ a square)
-# filled block-diagonal glyphs that chamfer a piece's convex OUTER corners (a subtle bevel). Each
-# cuts one corner of a single char: TL/BL apply to a cell's LEFT char, TR/BR to its RIGHT char.
-CHAMFER_TL, CHAMFER_TR, CHAMFER_BL, CHAMFER_BR = '🭁', '🭌', '🭒', '🭝'
 
 # Spawn pacing (staggering). Real progress is stepwise — several fast checks can land between frames,
 # or a whole support layer can clear at once — which spawns a burst. We smooth it two ways:
@@ -311,81 +308,39 @@ class BlocksSplash(Splash):
         self.gh = max(1, self.h)
         self.sim = BlocksSim(self.gw, self.gh, self.rng)
         self._attr = self._bake_palette(pal)
-        self._edge = self._bake_edges(pal)
         self._label_attr = pal.rgb_pair((238, 238, 246), (12, 12, 18)) | curses.A_BOLD
-        # one coin flip per run: EITHER every piece is chamfered OR every piece is square-cornered
-        self.chamfered = self.rng.random() < 0.5
-        self._lch, self._rch = self._chamfer_glyphs()
-
-    def _chamfer_glyphs(self):
-        '''Precompute the two glyphs each cell draws. If this run is square-cornered, all BLOCK;
-        otherwise a convex OUTER corner of a piece (two orthogonal sides meeting a DIFFERENT piece)
-        chamfers that corner's char. Fixed for the run (based on the solved tiling), so falling and
-        settled cells look identical.'''
-        sim, gh, gw, cp = self.sim, self.sim.gh, self.sim.gw, self.sim.cell_piece
-        lch = [[BLOCK] * gw for _ in range(gh)]
-        rch = [[BLOCK] * gw for _ in range(gh)]
-        if not self.chamfered:
-            return lch, rch                              # square-cornered run
-        for r in range(gh):
-            for c in range(gw):
-                pid = cp[r][c]
-                if pid < 0:
-                    continue
-                # exposed = a neighbouring GRID cell belongs to a different piece (screen edges and
-                # same-piece neighbours are not "outside", so the mass stays flush to the border)
-                et = r > 0 and cp[r - 1][c] != pid
-                eb = r < gh - 1 and cp[r + 1][c] != pid
-                el = c > 0 and cp[r][c - 1] != pid
-                er = c < gw - 1 and cp[r][c + 1] != pid
-                if et and el:
-                    lch[r][c] = CHAMFER_TL
-                elif eb and el:
-                    lch[r][c] = CHAMFER_BL
-                if et and er:
-                    rch[r][c] = CHAMFER_TR
-                elif eb and er:
-                    rch[r][c] = CHAMFER_BR
-        return lch, rch
 
     def _bake_palette(self, pal):
         '''hue -> curses attr: one solid colour per palette hue (a piece is one colour), painted as
         fg AND bg — a terminal that draws █ from its font (not as a built-in cell fill) leaves a gap
-        at the line spacing, which would otherwise show the black default bg as scanlines. With the
-        chamfer attrs, 2×PALETTE_HUES pairs, fixed regardless of piece count.'''
+        at the line spacing, which would otherwise show the black default bg as scanlines.
+        PALETTE_HUES pairs, fixed regardless of piece count.'''
         return [pal.rgb_pair(rgb, rgb) | curses.A_BOLD
                 for rgb in (_hsv(k / PALETTE_HUES, 0.66, 0.86) for k in range(PALETTE_HUES))]
-
-    def _bake_edges(self, pal):
-        '''hue -> attr for the CHAMFER glyphs: the piece colour over the default background, so the
-        cut-off corner shows through. (Solid cells instead paint fg == bg — see _bake_palette.)'''
-        return [pal.rgb_attr(_hsv(k / PALETTE_HUES, 0.66, 0.86)) | curses.A_BOLD
-                for k in range(PALETTE_HUES)]
 
     def render(self, frame):
         self.sim.set_progress(frame.progress)
         self.sim.step(frame.dt)
         sim, scr = self.sim, self.scr
         scr.erase()
-        lch, rch = self._lch, self._rch
-        # the settled heap — one solid colour per piece, chamfered outer corners
+        cell = BLOCK * 2                                 # one grid cell = two chars (≈ square)
+        # the settled heap — one solid colour per piece
         sc = sim.settled_color
         for r in range(sim.gh):
             row_c = sc[r]
             for c in range(sim.gw):
                 col = row_c[c]
                 if col >= 0:
-                    self._cell(r, c * 2, lch[r][c], col)
-                    self._cell(r, c * 2 + 1, rch[r][c], col)
+                    self._add(r, c * 2, cell, self._attr[col])
         # pieces in flight, drawn at their current fall offset
         for pid in sim.falling:
             pc = sim.pieces[pid]
             drop = int(pc.offset)
+            attr = self._attr[pc.color]
             for (r, c) in pc.cells:
                 rr = r - drop
                 if 0 <= rr < sim.gh:
-                    self._cell(rr, c * 2, lch[r][c], pc.color)
-                    self._cell(rr, c * 2 + 1, rch[r][c], pc.color)
+                    self._add(rr, c * 2, cell, attr)
         if frame.label:
             self._draw_label(frame)
         return sim.filled
@@ -403,9 +358,6 @@ class BlocksSplash(Splash):
         for k, ch in enumerate(text):
             if x + k < self.w:
                 self._add(y, x + k, ch, self._label_attr)
-
-    def _cell(self, y, x, glyph, hue):
-        self._add(y, x, glyph, self._attr[hue] if glyph == BLOCK else self._edge[hue])
 
     def _add(self, y, x, s, attr):
         try:

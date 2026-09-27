@@ -7,8 +7,8 @@ blocks** — and, unlike Tetris, **no rows are ever cleared**; the heap only gro
 from just off the top of the screen, several at once, until it's full. Each block cell is **two
 ascii blocks side-by-side** (≈ a square on a modern terminal), and each polyomino is **one solid
 colour** (picked for hue contrast with its neighbours), so the settled screen reads as distinct
-shapes stacked. Each run flips a coin for its corner style: **all pieces chamfered** (softly beveled
-outer corners, via the filled block-diagonals 🭁🭌🭒🭝) or **all square**.
+shapes stacked. Blocks are drawn as solid square cells (full-block glyphs painted with a matching
+background, so no gaps show between rows on any font).
 
 The fill is **driven by progress**: it finishes filling just as inspection completes (0 → 100%).
 Purely cosmetic — the blocks are paced by configsys's real progress, never the other way.

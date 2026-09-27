@@ -7,6 +7,7 @@ deterministic given its rng, so these assertions are stable.'''
 import importlib.util
 import pathlib
 import random
+import types
 
 _p = pathlib.Path(__file__).resolve().parent.parent / 'blocks.py'
 _spec = importlib.util.spec_from_file_location('blocks', _p)
@@ -183,31 +184,22 @@ def test_determinism_by_seed():
     assert [pc.cells for pc in c.pieces] != [pc.cells for pc in a.pieces]
 
 
-def test_corner_style_is_a_per_run_coin_flip():
-    '''Each run picks ONE style up front: all pieces chamfered, or all square. Both occur across
-    seeds, and a square run draws only BLOCK; a chamfered run uses at least one chamfer glyph.'''
-    chamfers = {blocks.CHAMFER_TL, blocks.CHAMFER_TR, blocks.CHAMFER_BL, blocks.CHAMFER_BR}
-
-    def build(seed):
-        s = blocks.BlocksSplash.__new__(blocks.BlocksSplash)
-        s.rng = random.Random(seed)
-        s.gw, s.gh = 20, 12
-        s.sim = blocks.BlocksSim(s.gw, s.gh, s.rng)      # consumes rng like the real __init__
-        s.chamfered = s.rng.random() < 0.5
-        s._lch, s._rch = s._chamfer_glyphs()
-        return s
-
-    saw_square = saw_cham = False
-    for seed in range(30):
-        s = build(seed)
-        glyphs = {g for row in s._lch for g in row} | {g for row in s._rch for g in row}
-        if s.chamfered:
-            saw_cham = True
-            assert glyphs & chamfers                     # a chamfered run actually chamfers
-        else:
-            saw_square = True
-            assert glyphs == {blocks.BLOCK}              # a square run is pure BLOCK
-    assert saw_square and saw_cham                       # both styles are reachable
+def test_only_full_blocks_are_drawn():
+    '''Square blocks only: the rounded-corner style drew block-diagonal glyphs (🭁🭌🭒🭝) most
+    monospace fonts lack — a fallback font per glyph made those runs choppy — so it was dropped.'''
+    assert not any(n.startswith('CHAMFER') for n in dir(blocks))
+    drawn = []
+    s = blocks.BlocksSplash.__new__(blocks.BlocksSplash)
+    s.rng = random.Random(3)
+    s.w, s.h = 40, 12
+    s.gw, s.gh = 20, 12
+    s.sim = blocks.BlocksSim(s.gw, s.gh, s.rng)
+    s._attr = list(range(blocks.PALETTE_HUES))
+    s.scr = types.SimpleNamespace(erase=lambda: None)
+    s._add = lambda y, x, text, attr: drawn.append(text)
+    for i in range(120):
+        s.render(types.SimpleNamespace(progress=min(1, i / 60), dt=1 / 30, label=None, counts=(0, 0)))
+    assert drawn and set(''.join(drawn)) == {blocks.BLOCK}
 
 
 def test_label_shows_counts_and_percent():
