@@ -18,7 +18,7 @@ curses-free, deterministic sim (unit-tested); BlocksSplash the curses renderer. 
 foot exports it so the trusted loader registers `splash: blocks`.
 
 Colour budget: curses `color_pair()` is 8-bit and the host does NOT recycle pairs between frames,
-so a run must stay < 256 distinct pairs. There can be ~150+ pieces, so pieces can't each own a
+so a run must stay < 256 distinct pairs (this one uses 2×PALETTE_HUES: solid + chamfer edge). There can be ~150+ pieces, so pieces can't each own a
 colour; instead we use a FIXED palette of PALETTE_HUES hues (one solid colour per piece = the only
 pairs) and assign pieces by greedy graph-colouring that maximises hue contrast between neighbours,
 so the settled screen reads as distinct polyominoes stacked.
@@ -311,6 +311,7 @@ class BlocksSplash(Splash):
         self.gh = max(1, self.h)
         self.sim = BlocksSim(self.gw, self.gh, self.rng)
         self._attr = self._bake_palette(pal)
+        self._edge = self._bake_edges(pal)
         self._label_attr = pal.rgb_pair((238, 238, 246), (12, 12, 18)) | curses.A_BOLD
         # one coin flip per run: EITHER every piece is chamfered OR every piece is square-cornered
         self.chamfered = self.rng.random() < 0.5
@@ -348,8 +349,16 @@ class BlocksSplash(Splash):
         return lch, rch
 
     def _bake_palette(self, pal):
-        '''hue -> curses attr: one solid colour per palette hue (a piece is one colour). The ONLY
-        pairs the run allocates (PALETTE_HUES), so the pair count is fixed regardless of piece count.'''
+        '''hue -> curses attr: one solid colour per palette hue (a piece is one colour), painted as
+        fg AND bg — a terminal that draws █ from its font (not as a built-in cell fill) leaves a gap
+        at the line spacing, which would otherwise show the black default bg as scanlines. With the
+        chamfer attrs, 2×PALETTE_HUES pairs, fixed regardless of piece count.'''
+        return [pal.rgb_pair(rgb, rgb) | curses.A_BOLD
+                for rgb in (_hsv(k / PALETTE_HUES, 0.66, 0.86) for k in range(PALETTE_HUES))]
+
+    def _bake_edges(self, pal):
+        '''hue -> attr for the CHAMFER glyphs: the piece colour over the default background, so the
+        cut-off corner shows through. (Solid cells instead paint fg == bg — see _bake_palette.)'''
         return [pal.rgb_attr(_hsv(k / PALETTE_HUES, 0.66, 0.86)) | curses.A_BOLD
                 for k in range(PALETTE_HUES)]
 
@@ -366,19 +375,17 @@ class BlocksSplash(Splash):
             for c in range(sim.gw):
                 col = row_c[c]
                 if col >= 0:
-                    attr = self._attr[col]
-                    self._add(r, c * 2, lch[r][c], attr)
-                    self._add(r, c * 2 + 1, rch[r][c], attr)
+                    self._cell(r, c * 2, lch[r][c], col)
+                    self._cell(r, c * 2 + 1, rch[r][c], col)
         # pieces in flight, drawn at their current fall offset
         for pid in sim.falling:
             pc = sim.pieces[pid]
             drop = int(pc.offset)
-            attr = self._attr[pc.color]
             for (r, c) in pc.cells:
                 rr = r - drop
                 if 0 <= rr < sim.gh:
-                    self._add(rr, c * 2, lch[r][c], attr)
-                    self._add(rr, c * 2 + 1, rch[r][c], attr)
+                    self._cell(rr, c * 2, lch[r][c], pc.color)
+                    self._cell(rr, c * 2 + 1, rch[r][c], pc.color)
         if frame.label:
             self._draw_label(frame)
         return sim.filled
@@ -396,6 +403,9 @@ class BlocksSplash(Splash):
         for k, ch in enumerate(text):
             if x + k < self.w:
                 self._add(y, x + k, ch, self._label_attr)
+
+    def _cell(self, y, x, glyph, hue):
+        self._add(y, x, glyph, self._attr[hue] if glyph == BLOCK else self._edge[hue])
 
     def _add(self, y, x, s, attr):
         try:
